@@ -12,6 +12,7 @@ const Children = (() => {
   let viewChildId = null;
   let viewInstanceId = null;
   let viewLessonId = null;
+  let editActivityId = null; // when set, the Lesson detail shows the Activity edit form
 
   function randomToken(len = 6) {
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -285,6 +286,60 @@ const Children = (() => {
     return type.activityTypeKey.startsWith('AT-');
   }
 
+  // Optional Activity fields (SRS Module 03 §4), authored identically to the
+  // template path (courses.js). All three are absent-when-blank: a blank entry
+  // stores no property at all — never "", 0, null, or a default.
+  const BLOCK_HINTS = ['morning', 'afternoon', 'evening', 'night']; // Interchange Contract §1d.
+
+  function normalizeOptionalActivityFields(input) {
+    const out = {};
+    if ('expectedDurationMin' in input) {
+      const raw = input.expectedDurationMin;
+      if (raw === undefined || raw === null || String(raw).trim() === '') {
+        out.expectedDurationMin = null;
+      } else {
+        const n = Number(raw);
+        // Positive integer only; the 15-min fallback (Module 05 §2.3) is
+        // generation-time math, never persisted — so 0 is not a valid stored value.
+        if (!Number.isInteger(n) || n < 1) {
+          return { error: 'Expected duration (min) must be a positive whole number, or left blank.' };
+        }
+        out.expectedDurationMin = n;
+      }
+    }
+    if ('instructions' in input) {
+      const raw = input.instructions;
+      out.instructions =
+        raw === undefined || raw === null || String(raw).trim() === '' ? null : String(raw).trim();
+    }
+    if ('blockHint' in input) {
+      const raw = input.blockHint;
+      if (!raw) out.blockHint = null;
+      else if (!BLOCK_HINTS.includes(raw)) return { error: 'Block hint must be morning, afternoon, evening, or night.' };
+      else out.blockHint = raw;
+    }
+    return { fields: out };
+  }
+
+  function applyOptionalActivityFields(record, normalized) {
+    for (const key of ['expectedDurationMin', 'instructions', 'blockHint']) {
+      if (key in normalized) {
+        if (normalized[key] === null) delete record[key];
+        else record[key] = normalized[key];
+      }
+    }
+  }
+
+  function blockHintOptions(selected) {
+    return ['', ...BLOCK_HINTS]
+      .map((v) => {
+        const label = v === '' ? '(none)' : v;
+        const sel = v === (selected || '') ? ' selected' : '';
+        return `<option value="${v}"${sel}>${label}</option>`;
+      })
+      .join('');
+  }
+
   // A new Activity mints from THIS Instance's own instanceToken (read off
   // the owning Course record) and the Lesson's current nextActivitySeq —
   // never max(existing)+1, never a number a deleted Activity once held.
@@ -300,6 +355,9 @@ const Children = (() => {
       }
       sequenceNumber = Number(fields.sequenceNumber);
     }
+
+    const optNorm = normalizeOptionalActivityFields(fields);
+    if (optNorm.error) return { error: optNorm.error };
 
     const lessonBefore = await Storage.get('lessons', lessonId);
     const instance = await Storage.get('courses', lessonBefore.courseId);
@@ -328,6 +386,7 @@ const Children = (() => {
           lessonTitle: lessonBefore.title,
         };
         if (sequenceNumber !== undefined) record.sequenceNumber = sequenceNumber;
+        applyOptionalActivityFields(record, optNorm.fields);
 
         t.objectStore('activities').put(record);
         lessonsStore.put({ ...lesson, nextActivitySeq: seq + 1 });
@@ -343,11 +402,18 @@ const Children = (() => {
     const existing = await Storage.get('activities', id);
     if (!fields.title || !fields.title.trim()) return { error: 'Title is required.' };
     if (!tier) return { error: 'Difficulty Tier must resolve to an existing Tier.' };
+
+    const optNorm = normalizeOptionalActivityFields(fields);
+    if (optNorm.error) return { error: optNorm.error };
+
+    // Instance edit writes only this instance row (never the template); spread
+    // preserves id/seq/order/instanceToken-derived id — editing never re-mints.
     const record = { ...existing, title: fields.title.trim(), required: !!fields.required, difficultyTier: tier.tierId };
     if (fields.payload) record.payload = fields.payload;
     if (fields.sequenceNumber !== undefined && fields.sequenceNumber !== '') {
       record.sequenceNumber = Number(fields.sequenceNumber);
     }
+    applyOptionalActivityFields(record, optNorm.fields);
     await Storage.put('activities', record);
     return { record };
   }
@@ -708,6 +774,16 @@ const Children = (() => {
     heading.textContent = lesson.title;
     root.appendChild(heading);
 
+    if (editActivityId) {
+      const activity = activities.find((a) => a.id === editActivityId);
+      if (!activity) {
+        editActivityId = null;
+      } else {
+        root.appendChild(buildActivityEditForm(root, lesson, activity, activityTypes, tiers));
+        return;
+      }
+    }
+
     const list = document.createElement('ul');
     list.className = 'activity-list';
     activities.forEach((a, index) => {
@@ -722,7 +798,7 @@ const Children = (() => {
         </label>
         <button data-action="up" ${index === 0 ? 'disabled' : ''}>&uarr;</button>
         <button data-action="down" ${index === activities.length - 1 ? 'disabled' : ''}>&darr;</button>
-        <button data-action="rename">Rename</button>
+        <button data-action="edit">Edit</button>
         <button data-action="delete">Delete</button>
       `;
       item.querySelector('[data-action="up"]').addEventListener('click', async () => {
@@ -736,17 +812,9 @@ const Children = (() => {
       item.querySelector('[data-action="exclude"]').addEventListener('change', async (e) => {
         await setExcludeFromGeneration(a.id, e.target.checked);
       });
-      item.querySelector('[data-action="rename"]').addEventListener('click', async () => {
-        const warned = window.confirm(
-          'Editing this Activity changes nothing on the child\'s device if it was already received. Continue?'
-        );
-        if (!warned) return;
-        const newTitle = window.prompt('New title:', a.title);
-        if (newTitle && newTitle.trim()) {
-          const tier = tiers.find((t) => t.tierId === a.difficultyTier);
-          await editInstanceActivity(a.id, { title: newTitle.trim(), required: a.required }, tier);
-          render(root);
-        }
+      item.querySelector('[data-action="edit"]').addEventListener('click', () => {
+        editActivityId = a.id;
+        render(root);
       });
       item.querySelector('[data-action="delete"]').addEventListener('click', async () => {
         const warned = window.confirm(
@@ -779,6 +847,9 @@ const Children = (() => {
       <label>Required<input type="checkbox" name="required"></label>
       <label>Difficulty Tier<select name="difficultyTier"><option value="">(select)</option>${tierOptions}</select></label>
       <div class="payload-fields"></div>
+      <label>Expected duration (min)<input type="number" name="expectedDurationMin" min="1" step="1"></label>
+      <label>Instructions<input type="text" name="instructions"></label>
+      <label>Block hint<select name="blockHint">${blockHintOptions('')}</select></label>
       <p class="error" hidden></p>
       <button type="submit">Add Activity</button>
     `;
@@ -862,6 +933,9 @@ const Children = (() => {
           required: form.required.checked,
           payload: payloadResult.payload,
           sequenceNumber: type.structurePattern === 'count' ? form.sequenceNumber.value : undefined,
+          expectedDurationMin: form.expectedDurationMin.value,
+          instructions: form.instructions.value,
+          blockHint: form.blockHint.value,
         },
         type,
         tier
@@ -871,6 +945,72 @@ const Children = (() => {
         errorEl.textContent = result.error;
         return;
       }
+      render(root);
+    });
+
+    return form;
+  }
+
+  // Edit form for an existing Instance Activity. Edits title, required, tier,
+  // sequenceNumber (count types only), and the optional trio. Payload untouched.
+  // Saving surfaces the FR-12 divergence warning, writes only this instance row
+  // (never the template), and never re-mints id or touches seq/order.
+  function buildActivityEditForm(root, lesson, activity, activityTypes, tiers) {
+    const type = activityTypes.find((t) => t.activityTypeKey === activity.activityType);
+    const isCount = type && type.structurePattern === 'count';
+    const tierOptions = tiers
+      .map(
+        (t) =>
+          `<option value="${t.tierId}"${t.tierId === activity.difficultyTier ? ' selected' : ''}>${escapeHtml(t.label)}</option>`
+      )
+      .join('');
+
+    const form = document.createElement('form');
+    form.innerHTML = `
+      <h3>Edit Activity <code>${escapeHtml(activity.id)}</code></h3>
+      <label>Title<input type="text" name="title" value="${escapeHtml(activity.title)}" required></label>
+      <label>Required<input type="checkbox" name="required" ${activity.required ? 'checked' : ''}></label>
+      <label>Difficulty Tier<select name="difficultyTier"><option value="">(select)</option>${tierOptions}</select></label>
+      ${isCount ? `<label>Sequence number<input type="number" name="sequenceNumber" value="${activity.sequenceNumber ?? ''}"></label>` : ''}
+      <label>Expected duration (min)<input type="number" name="expectedDurationMin" min="1" step="1" value="${activity.expectedDurationMin ?? ''}"></label>
+      <label>Instructions<input type="text" name="instructions" value="${escapeHtml(activity.instructions || '')}"></label>
+      <label>Block hint<select name="blockHint">${blockHintOptions(activity.blockHint)}</select></label>
+      <p class="error" hidden></p>
+      <button type="submit">Save</button>
+      <button type="button" data-action="cancel">Cancel</button>
+    `;
+    const errorEl = form.querySelector('.error');
+
+    form.querySelector('[data-action="cancel"]').addEventListener('click', () => {
+      editActivityId = null;
+      render(root);
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const warned = window.confirm(
+        'Editing this Activity changes nothing on the child\'s device if it was already received. Continue?'
+      );
+      if (!warned) return;
+      const tier = tiers.find((t) => t.tierId === form.difficultyTier.value);
+      const result = await editInstanceActivity(
+        activity.id,
+        {
+          title: form.title.value,
+          required: form.required.checked,
+          sequenceNumber: isCount ? form.sequenceNumber.value : undefined,
+          expectedDurationMin: form.expectedDurationMin.value,
+          instructions: form.instructions.value,
+          blockHint: form.blockHint.value,
+        },
+        tier
+      );
+      if (result.error) {
+        errorEl.hidden = false;
+        errorEl.textContent = result.error;
+        return;
+      }
+      editActivityId = null;
       render(root);
     });
 
