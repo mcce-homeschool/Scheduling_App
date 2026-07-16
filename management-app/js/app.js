@@ -19,6 +19,8 @@ const App = (() => {
     '#/children': () => Children.render(root),
     '#/chores': () => Chores.render(root),
     '#/events': () => Events.render(root),
+    '#/pacing': () => Pacing.render(root),
+    '#/packet': () => Packet.render(root),
     '#/settings': () => Settings.renderSettingsPage(root),
   };
 
@@ -61,6 +63,8 @@ const App = (() => {
       <a href="#/children">Children</a>
       <a href="#/chores">Chores</a>
       <a href="#/events">Events</a>
+      <a href="#/pacing">Pacing</a>
+      <a href="#/packet">Packet</a>
       <a href="#/settings">Settings</a>
     `;
     startRouter();

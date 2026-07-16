@@ -69,17 +69,19 @@ const Children = (() => {
   // history scoped to this childId — all empty stores at M5, but real code,
   // not a stub (same reasoning as M4's delete-guards).
   async function cascadeDeleteChild(childId) {
-    const [chores, familyEvents, pacingProfiles] = await Promise.all([
+    // No pacingProfiles cleanup here: a Pacing Profile is 1:1 with a Course
+    // Instance (keyed by instanceId — TDS_Slice_M7 §1), and this path is only
+    // reached after the Tier 1 guard (FR-7) has confirmed the child has zero
+    // Instances, so it can have no Profiles either.
+    const [chores, familyEvents] = await Promise.all([
       Storage.getAll('chores'),
       Storage.getAll('familyEvents'),
-      Storage.getAll('pacingProfiles'),
     ]);
-    await Storage.runTransaction(['children', 'chores', 'familyEvents', 'pacingProfiles'], 'readwrite', (t) => {
+    await Storage.runTransaction(['children', 'chores', 'familyEvents'], 'readwrite', (t) => {
       for (const c of chores.filter((c) => c.childId === childId)) t.objectStore('chores').delete(c.id);
       for (const e of familyEvents.filter((e) => (e.childIds || []).includes(childId))) {
         t.objectStore('familyEvents').delete(e.id);
       }
-      for (const p of pacingProfiles.filter((p) => p.childId === childId)) t.objectStore('pacingProfiles').delete(p.id);
       t.objectStore('children').delete(childId);
     });
   }
@@ -164,7 +166,6 @@ const Children = (() => {
   // independent of its Instance). Never touches the source template.
   async function deleteInstance(instanceId) {
     const lessons = await Storage.getAllByIndex('lessons', 'by_courseId', instanceId);
-    const pacingProfiles = await Storage.getAll('pacingProfiles');
     await Storage.runTransaction(
       ['courses', 'lessons', 'activities', 'pacingProfiles'],
       'readwrite',
@@ -178,8 +179,9 @@ const Children = (() => {
         }
         const lessonsStore = t.objectStore('lessons');
         for (const lesson of lessons) lessonsStore.delete(lesson.id);
-        const pacingStore = t.objectStore('pacingProfiles');
-        for (const p of pacingProfiles.filter((p) => p.courseId === instanceId)) pacingStore.delete(p.id);
+        // The Pacing Profile is keyed by this Instance's own id (TDS_Slice_M7
+        // §1/§3) — a single delete by key, no scan.
+        t.objectStore('pacingProfiles').delete(instanceId);
         t.objectStore('courses').delete(instanceId);
       }
     );
@@ -556,7 +558,7 @@ const Children = (() => {
       await stampCourse(stampForm.templateId.value, child.id);
       stampErr.hidden = true;
       stampOk.hidden = false;
-      stampOk.textContent = 'Stamped. Pacing Configuration (not yet available until M7) is the required next step.';
+      stampOk.textContent = 'Stamped. Set up Pacing Configuration for this Instance as the required next step.';
       render(root);
     });
     root.appendChild(stampForm);
@@ -827,8 +829,10 @@ const Children = (() => {
         if (!form.reference.value.trim()) return { error: 'Reference is required.' };
         return { payload: { reference: form.reference.value.trim() } };
       }
+      // Custom type — stored as `{ text }` so Packet Generation's freeText
+      // projection reads it directly (TDS_Slice_M7 §4.5).
       if (!form.referenceOrInstructions.value.trim()) return { error: 'This field is required.' };
-      return { payload: { referenceOrInstructions: form.referenceOrInstructions.value.trim() } };
+      return { payload: { text: form.referenceOrInstructions.value.trim() } };
     }
 
     form.addEventListener('submit', async (e) => {
