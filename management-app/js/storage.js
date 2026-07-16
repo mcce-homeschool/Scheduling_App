@@ -1,9 +1,10 @@
 /* Module: storage.js — managementAppDB schema, open/seed.
- * Per TDS_Slice_M4_Management_App_Rev3.md §2 and TDS_Slice_M5_Management_App_Rev7.md §2. */
+ * Per TDS_Slice_M4_Management_App_Rev3.md §2, TDS_Slice_M5_Management_App_Rev7.md §2,
+ * and TDS_Slice_M7_Management_App_Rev1.md §2 (v3: pacingProfiles + generationLog). */
 
 const Storage = (() => {
   const DB_NAME = 'managementAppDB';
-  const DB_VERSION = 2;
+  const DB_VERSION = 3;
 
   const ACTIVITY_TYPE_SEED = [
     { activityTypeKey: 'quiz', label: 'Quiz', capturePattern: 'grade-optional', structurePattern: 'count' },
@@ -33,15 +34,20 @@ const Storage = (() => {
   ];
 
   // Declared now, empty until their owning milestone (Q6 — TDS §1/§2), so no
-  // future milestone needs an IndexedDB version bump.
+  // future milestone needs an IndexedDB version bump. `pacingProfiles` and
+  // `generationLog` are NOT here: M7 (§2) owns their keyPaths/indexes and
+  // creates them in the v3 block below, not as generic keyPath:'id' stores.
   const EMPTY_STORES = [
-    'courses', 'lessons', 'activities', 'children', 'pacingProfiles',
-    'chores', 'familyEvents', 'generationLog', 'importedCompletions', 'unmatchedRows',
+    'courses', 'lessons', 'activities', 'children',
+    'chores', 'familyEvents', 'importedCompletions', 'unmatchedRows',
   ];
+
+  // Owned by the v3 upgrade (TDS_Slice_M7 §2) — non-'id' keyPaths + indexes.
+  const V3_STORES = ['pacingProfiles', 'generationLog'];
 
   const STORE_NAMES = [
     'appSettings', 'meta', 'curricula', 'tiers', 'rewardCategories', 'activityTypes',
-    ...EMPTY_STORES,
+    ...EMPTY_STORES, ...V3_STORES,
   ];
 
   let dbPromise = null;
@@ -121,6 +127,27 @@ const Storage = (() => {
               // nextSeq > 4: parent already minted a custom D04 — write nothing.
             };
           }
+        }
+
+        if (oldVersion < 3) {
+          // TDS_Slice_M7 §2: own pacingProfiles/generationLog with their real
+          // keyPaths + indexes. Both are guaranteed empty (declared empty at
+          // M4, never written through M6), so drop-and-recreate is lossless.
+          // Guard on contains(): a v1/v2 device created these as keyPath:'id'
+          // placeholders and must have them dropped first; a fresh install
+          // (oldVersion 0) never created them here, so it only creates.
+          for (const name of V3_STORES) {
+            if (db.objectStoreNames.contains(name)) db.deleteObjectStore(name);
+          }
+          // 1:1 with the Instance — fetched only by get(instanceId); no index.
+          db.createObjectStore('pacingProfiles', { keyPath: 'instanceId' });
+          // One row per (child, item) decision; put() over the composite key
+          // makes reproduction idempotent (TDS §1/§4.4).
+          const generationLog = db.createObjectStore('generationLog', {
+            keyPath: ['childId', 'itemId'],
+          });
+          generationLog.createIndex('by_child', 'childId');
+          generationLog.createIndex('by_instance', 'instanceId');
         }
       };
 

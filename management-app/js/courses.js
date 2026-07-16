@@ -261,8 +261,10 @@ const Courses = (() => {
       return { payload: { reference: form.reference.value.trim() } };
     }
     // Custom type — always a single free-text field, regardless of structurePattern (§8).
+    // Stored as `{ text }` so Packet Generation's freeText projection (Interchange
+    // Contract §1a payload; TDS_Slice_M7 §4.5) reads it directly — no rename at emit.
     if (!form.referenceOrInstructions.value.trim()) return { error: 'This field is required.' };
-    return { payload: { referenceOrInstructions: form.referenceOrInstructions.value.trim() } };
+    return { payload: { text: form.referenceOrInstructions.value.trim() } };
   }
 
   async function createActivity(lessonId, fields, type, tier) {
