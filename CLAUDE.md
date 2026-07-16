@@ -178,6 +178,16 @@ From M1 design (per `TDS_Slice_M1_Child_App.md` §4 — corrected 2026-07-13, fi
 - **Benefit**: Reschedule sort-order and block continuity for free.
 - **Do not deviate** (e.g., no per-date plannerMeta).
 
+### F. Cache-Busting on Styling Changes (MANDATORY)
+
+Any session that edits a **separately-linked stylesheet** (e.g. `management-app/styles/styles.css`) **must bump the cache-busting version** on that stylesheet's `<link>` in the app's `index.html` **in the same commit**.
+
+- The link **must** carry a version query string: `href="styles/styles.css?v=N"`.
+- On every change to the CSS file, **increment `N` by one** (`?v=2` → `?v=3` → …).
+- **Rationale**: Browsers and the GitHub Pages CDN cache `styles.css` aggressively. Without a new URL, an offline-first / static-hosted app keeps serving the stale stylesheet and the change appears not to take effect. The `?v=N` bump is the only signal that forces a fresh fetch.
+- **Scope**: Applies wherever CSS is loaded as a separate file. It does **not** apply to the single-file child-app bundle (`homeschool-child-app.html`), where styles are inlined and the whole file's URL already changes.
+- **A CSS edit without a matching `?v=N` bump is an incomplete change.** Do not hand off or commit styling work without it.
+
 ---
 
 ## IV. Verification & Audit Rituals
@@ -421,6 +431,7 @@ The TDS slice does not clarify this. Proceeding with Option [X] pending your con
 | Completion CSV interchange | **LOCKED** | 8–9 | Tab-separated, one row per completion. |
 | Reserved prefix validation (CHR, EVT) | **LOCKED** | All | Enforced on packet load. |
 | `plannerMeta` keyed by item ID | **LOCKED** | 3–5 | Reschedule continuity. |
+| Cache-bust `?v=N` on CSS edits | **LOCKED** | All (multi-file apps) | Bump stylesheet `<link>` version in same commit. See §III.F. |
 | Ledger fold at N=100 | **LOCKED** | 6 | User mental model. Corrected 2026-07-13 (was misstated as N=25; TDS_Slice_M2 §4 is authoritative at N=100). |
 | Single-file bundle for Android | **LOCKED** | M1 | Relative paths break on multi-file folders. |
 | Vanilla JS, no build step | **LOCKED** | All | GitHub Pages deployment requirement. |
@@ -449,8 +460,8 @@ The TDS slice does not clarify this. Proceeding with Option [X] pending your con
 
 ## XII. Version & Amendments
 
-**Current Version:** 1.0  
-**Date:** 2026-07-13
+**Current Version:** 1.3  
+**Date:** 2026-07-16
 
 ### Change Log
 
@@ -459,6 +470,7 @@ The TDS slice does not clarify this. Proceeding with Option [X] pending your con
 | 1.0 | 2026-07-13 | Initial CLAUDE.md for Child App M2 build. Enforces split-app architecture, documentation-first gate, core design constraints, and decision escalation. |
 | 1.1 | 2026-07-13 | Corrected §III.D and §X: Reward Ledger fold cadence is N=100, not N=25, per `TDS_Slice_M2_Child_App.md` §4 (the document that fixes this concrete number — Domain Model §3.7 only ever said "every N entries"). Resolved with Ray after a pre-build audit found the two documents disagreed. |
 | 1.2 | 2026-07-13 | Corrected §III.E: `plannerMeta` shape is `{ id, sortOrder?, blockHint?, deferredDate? }` (per `TDS_Slice_M1_Child_App.md` §4 and the actual code), not `{ rescheduledTo, sortOrder, blockAssignment }` as previously stated. |
+| 1.3 | 2026-07-16 | Added §III.F and §X row: styling changes to a separately-linked stylesheet must bump the cache-busting `?v=N` on the app's `index.html` stylesheet `<link>` in the same commit, so cached CSS is not served stale. |
 
 ---
 
